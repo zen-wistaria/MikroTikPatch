@@ -30,6 +30,11 @@ ENV_FILE="$SCRIPT_DIR/.env"
 BUILD_BASE_DIR="/tmp/mikrotik_build"
 PUBLISH_BASE_DIR="$SCRIPT_DIR/publish"
 AUTHOR="Unknown - Local Patched Build"
+CACHE_DIR="$SCRIPT_DIR/cache"
+USE_CACHE=true
+CLEAR_CACHE_MODE=false
+SHOW_CACHE_MODE=false
+MENU_MODE=false
 
 # --- Banner ---
 show_banner() {
@@ -52,7 +57,7 @@ show_help() {
 Penggunaan:
   sudo ./build_local.sh [OPSI]
 
-Opsi:
+Opsi Build:
   -v, --version <versi>    Versi RouterOS (contoh: 7.18.2 atau 6.49.13)
                            Default: Otomatis mendeteksi versi stable terbaru
   -a, --arch <arch>        Arsitektur target: 'x86' atau 'arm64' (Default: x86)
@@ -61,14 +66,24 @@ Opsi:
   -m, --major <v7|v6>      Versi mayor: 'v7' atau 'v6' (Default: otomatis sesuai versi)
   -e, --env <file>         Path file konfigurasi .env (Default: ./.env)
   -o, --output <dir>       Direktori output (Default: ./publish/<version>)
-  -b  --by <author name>   Nama author untuk about
+  -b, --by <author name>   Nama author untuk tampilan About WebFig
   -k, --keep-build         Jangan hapus folder sementara build setelah selesai
+  -i, --menu               Buka menu interaktif
+
+Opsi Cache:
+  -c, --cache-dir <dir>    Direktori penyimpanan cache (Default: ./cache)
+  --no-cache               Bypass cache (selalu unduh ulang dari internet)
+  -C, --clear-cache        Menu / perintah untuk menghapus file cache download
+  --show-cache             Tampilkan daftar file dan total ukuran cache saat ini
+
   -h, --help               Tampilkan pesan bantuan ini
 
 Contoh:
   sudo ./build_local.sh -v 7.18.2 -a x86 -t all
   sudo ./build_local.sh -v 7.18.2 -t chr
-  sudo ./build_local.sh -v 6.49.13 -a x86 -t npk
+  sudo ./build_local.sh --show-cache
+  sudo ./build_local.sh --clear-cache
+  sudo ./build_local.sh -i
 EOF
     exit 0
 }
@@ -103,6 +118,26 @@ while [[ $# -gt 0 ]]; do
         -b|--by)
             AUTHOR="$2"
             shift 2
+            ;;
+        -c|--cache-dir)
+            CACHE_DIR="$2"
+            shift 2
+            ;;
+        --no-cache)
+            USE_CACHE=false
+            shift 1
+            ;;
+        -C|--clear-cache|--clean-cache)
+            CLEAR_CACHE_MODE=true
+            shift 1
+            ;;
+        --show-cache)
+            SHOW_CACHE_MODE=true
+            shift 1
+            ;;
+        -i|--menu|--interactive)
+            MENU_MODE=true
+            shift 1
             ;;
         -k|--keep-build)
             KEEP_BUILD=true
@@ -195,6 +230,172 @@ check_dependencies() {
     else
         log_ok "Semua paket dependensi terpenuhi."
     fi
+}
+
+# ==============================================================================
+# MANAJEMEN CACHE DOWNLOAD
+# ==============================================================================
+
+show_cache_info() {
+    log_step "Informasi Cache Download"
+    if [ ! -d "$CACHE_DIR" ] || [ -z "$(ls -A "$CACHE_DIR" 2>/dev/null)" ]; then
+        log_info "Direktori cache saat ini kosong: $CACHE_DIR"
+        return 0
+    fi
+
+    local cache_size
+    cache_size=$(du -sh "$CACHE_DIR" 2>/dev/null | cut -f1)
+    local file_count
+    file_count=$(find "$CACHE_DIR" -type f ! -name "*.tmp.*" 2>/dev/null | wc -l)
+
+    echo -e "${BOLD}Lokasi Cache :${NC} ${CYAN}$CACHE_DIR${NC}"
+    echo -e "${BOLD}Total Ukuran :${NC} ${GREEN}$cache_size${NC}"
+    echo -e "${BOLD}Total File   :${NC} ${YELLOW}$file_count file${NC}"
+    echo ""
+    echo -e "${BOLD}Daftar File yang Tersimpan di Cache:${NC}"
+    find "$CACHE_DIR" -maxdepth 2 -type f ! -name "*.tmp.*" -exec ls -lh {} + 2>/dev/null | awk '{print "  " $5 "\t" $9}'
+    echo ""
+}
+
+clear_cache() {
+    local target_filter="${1:-all}"
+    if [ ! -d "$CACHE_DIR" ]; then
+        log_info "Direktori cache tidak ditemukan ($CACHE_DIR). Tidak ada yang perlu dibersihkan."
+        return 0
+    fi
+
+    if [ "$target_filter" == "all" ]; then
+        log_info "Menghapus seluruh file di $CACHE_DIR..."
+        rm -rf "$CACHE_DIR"
+        mkdir -p "$CACHE_DIR"
+        log_ok "Seluruh file cache berhasil dibersihkan."
+    else
+        log_info "Menghapus file cache yang cocok dengan pola: '$target_filter'..."
+        local deleted_count
+        deleted_count=$(find "$CACHE_DIR" -type f -name "*$target_filter*" 2>/dev/null | wc -l)
+        find "$CACHE_DIR" -type f -name "*$target_filter*" -delete 2>/dev/null || true
+        log_ok "Berhasil menghapus $deleted_count file cache untuk pola '$target_filter'."
+    fi
+}
+
+clear_cache_interactive() {
+    show_banner
+    show_cache_info
+
+    if [ ! -d "$CACHE_DIR" ] || [ -z "$(ls -A "$CACHE_DIR" 2>/dev/null)" ]; then
+        return 0
+    fi
+
+    echo -e "${BOLD}Pilihan Pembersihan Cache:${NC}"
+    echo "  1) Hapus SEMUA file di cache"
+    echo "  2) Hapus cache versi tertentu (contoh: 7.18.2 atau 6.49.13)"
+    echo "  3) Batal"
+    echo ""
+    read -rp "Pilihan Anda [1-3]: " c_opt
+    c_opt=$(echo "$c_opt" | tr -d '\r')
+    case "$c_opt" in
+        1)
+            clear_cache "all"
+            ;;
+        2)
+            read -rp "Masukkan versi atau kata kunci nama file yang ingin dihapus: " pattern
+            pattern=$(echo "$pattern" | tr -d '\r')
+            if [ -n "$pattern" ]; then
+                clear_cache "$pattern"
+            else
+                log_warn "Input kosong. Dibatalkan."
+            fi
+            ;;
+        3)
+            log_info "Pembersihan cache dibatalkan."
+            ;;
+        *)
+            log_warn "Pilihan tidak valid. Dibatalkan."
+            ;;
+    esac
+}
+
+cached_download() {
+    local url="$1"
+    local output_path="$2"
+    local filename="${3:-$(basename "$output_path")}"
+    local cache_target="$CACHE_DIR/$filename"
+
+    mkdir -p "$CACHE_DIR"
+    mkdir -p "$(dirname "$output_path")"
+
+    # Jika mode bypass cache aktif
+    if [ "$USE_CACHE" = false ]; then
+        log_info "Mengunduh langsung (bypass cache): $filename..."
+        wget -nv -O "$output_path" "$url"
+        return $?
+    fi
+
+    # Cek apakah file sudah tersedia di cache dan ukurannya > 0
+    if [ -s "$cache_target" ]; then
+        log_ok "Menggunakan file dari cache: $filename"
+        cp -p "$cache_target" "$output_path"
+        return 0
+    fi
+
+    # Unduh file dan simpan ke cache
+    log_info "Mengunduh dari internet: $filename..."
+    local tmp_file="${cache_target}.tmp.$$"
+    if wget -c -nv -O "$tmp_file" "$url"; then
+        mv "$tmp_file" "$cache_target"
+        cp -p "$cache_target" "$output_path"
+        log_ok "File berhasil diunduh dan disimpan ke cache: $filename"
+    else
+        rm -f "$tmp_file"
+        log_err "Gagal mengunduh: $url"
+        return 1
+    fi
+}
+
+show_interactive_menu() {
+    while true; do
+        show_banner
+        echo -e "${BOLD}MENU UTAMA:${NC}"
+        echo "  1) Jalankan Build Image RouterOS"
+        echo "  2) Bersihkan / Kelola Cache Download (--clear-cache)"
+        echo "  3) Tampilkan Isi & Ukuran Cache Saat Ini (--show-cache)"
+        echo "  4) Buat / Refresh Kunci Kriptografi (.env)"
+        echo "  5) Keluar"
+        echo ""
+        read -rp "Pilih menu [1-5]: " m_opt
+        m_opt=$(echo "$m_opt" | tr -d '\r')
+        case "$m_opt" in
+            1)
+                echo ""
+                log_info "Melanjutkan proses build..."
+                break
+                ;;
+            2)
+                clear_cache_interactive
+                echo ""
+                read -rp "Tekan Enter untuk kembali ke menu..."
+                ;;
+            3)
+                show_cache_info
+                echo ""
+                read -rp "Tekan Enter untuk kembali ke menu..."
+                ;;
+            4)
+                python3 gen_keys.py --force
+                setup_environment
+                echo ""
+                read -rp "Tekan Enter untuk kembali ke menu..."
+                ;;
+            5)
+                echo "Keluar."
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}[!] Pilihan tidak valid.${NC}"
+                sleep 1
+                ;;
+        esac
+    done
 }
 
 # --- Setup Kunci Kriptografi & Environment ---
@@ -435,11 +636,13 @@ EOF
     log_ok "Option squashfs dibuat: $BUILD_DIR/option.sfs"
 
     # 2. Python3 Squashfs (Python Standalone Musl/Glibc)
-    log_info "Mengunduh python standalone untuk $ARCH..."
+    log_info "Menyiapkan python standalone untuk $ARCH..."
     if [ "$ARCH" == "x86" ]; then
-        wget -nv -O "$BUILD_DIR/cpython.tar.gz" https://github.com/astral-sh/python-build-standalone/releases/download/20241206/cpython-3.11.11+20241206-x86_64-unknown-linux-musl-install_only_stripped.tar.gz
+        local py_url="https://github.com/astral-sh/python-build-standalone/releases/download/20241206/cpython-3.11.11+20241206-x86_64-unknown-linux-musl-install_only_stripped.tar.gz"
+        cached_download "$py_url" "$BUILD_DIR/cpython.tar.gz" "cpython-3.11.11-x86_64-linux-musl.tar.gz"
     elif [ "$ARCH" == "arm64" ]; then
-        wget -nv -O "$BUILD_DIR/cpython.tar.gz" https://github.com/indygreg/python-build-standalone/releases/download/20241206/cpython-3.11.11+20241206-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz
+        local py_url="https://github.com/indygreg/python-build-standalone/releases/download/20241206/cpython-3.11.11+20241206-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz"
+        cached_download "$py_url" "$BUILD_DIR/cpython.tar.gz" "cpython-3.11.11-aarch64-linux-gnu.tar.gz"
     fi
 
     tar -xzf "$BUILD_DIR/cpython.tar.gz" -C "$BUILD_DIR"
@@ -454,14 +657,14 @@ build_v7_download_and_extract() {
     log_step "[V7] 2. Mengunduh & Mengekstrak Official RouterOS $VERSION"
 
     local iso_file="$BUILD_DIR/mikrotik-$VERSION$ARCH_EXT.iso"
-    if [ ! -f "$iso_file" ]; then
-        log_info "Mengunduh ISO resmi dari download.mikrotik.com..."
-        wget -nv -O "$iso_file" "https://download.mikrotik.com/routeros/$VERSION/mikrotik-$VERSION$ARCH_EXT.iso"
-    fi
+    local iso_name="mikrotik-$VERSION$ARCH_EXT.iso"
+    local iso_url="https://download.mikrotik.com/routeros/$VERSION/$iso_name"
+    cached_download "$iso_url" "$iso_file" "$iso_name"
 
     # Ambil packages.csv untuk mendata semua paket
     local packages_csv="$BUILD_DIR/packages.csv"
-    wget -nv -O "$packages_csv" "https://${MIKRO_UPGRADE_URL}/routeros/$VERSION/packages.csv" || true
+    local csv_url="https://${MIKRO_UPGRADE_URL}/routeros/$VERSION/packages.csv"
+    cached_download "$csv_url" "$packages_csv" "packages-$VERSION.csv" || true
 
     local pkg_list=""
     if [ -f "$packages_csv" ]; then
@@ -484,8 +687,8 @@ build_v7_download_and_extract() {
             local pkg_file="${pkg}-$VERSION$ARCH_EXT.npk"
             local pkg_path="$BUILD_DIR/all_packages/$pkg_file"
             if [ ! -f "$pkg_path" ]; then
-                log_info "Mengunduh paket tambahan: $pkg_file"
-                wget -nv -O "$pkg_path" "https://download.mikrotik.com/routeros/$VERSION/$pkg_file" || true
+                local pkg_url="https://download.mikrotik.com/routeros/$VERSION/$pkg_file"
+                cached_download "$pkg_url" "$pkg_path" "$pkg_file" || true
             fi
         done
     fi
@@ -498,7 +701,8 @@ build_v7_patch_npk() {
     # Loader optional check (jika user memiliki loader patch sendiri)
     if [ -n "${LOADER_7Z_PASSWORD:-}" ] && [ -n "${CUSTOM_UPGRADE_URL:-}" ]; then
         log_info "Mencoba mengunduh file loader.7z..."
-        if wget -nv -O "$BUILD_DIR/loader.7z" "https://${CUSTOM_UPGRADE_URL}/routeros/loader.7z"; then
+        local loader_url="https://${CUSTOM_UPGRADE_URL}/routeros/loader.7z"
+        if cached_download "$loader_url" "$BUILD_DIR/loader.7z" "loader-$VERSION.7z"; then
             7z x -p"${LOADER_7Z_PASSWORD}" "$BUILD_DIR/loader.7z" -o"$SCRIPT_DIR" -y >/dev/null 2>&1 || true
             rm -f "$BUILD_DIR/loader.7z"
         fi
@@ -562,11 +766,10 @@ EOF
         umount "$BUILD_DIR/efiboot"
 
         # Rekonstruksi efiboot.img dengan rEFInd
-        log_info "Mengunduh rEFInd bootloader..."
+        log_info "Menyiapkan rEFInd bootloader..."
         local refind_zip="$BUILD_DIR/refind-bin-0.14.2.zip"
-        if [ ! -f "$refind_zip" ]; then
-            wget -nv -O "$refind_zip" https://downloads.sourceforge.net/project/refind/0.14.2/refind-bin-0.14.2.zip
-        fi
+        local refind_url="https://downloads.sourceforge.net/project/refind/0.14.2/refind-bin-0.14.2.zip"
+        cached_download "$refind_url" "$refind_zip" "refind-bin-0.14.2.zip"
 
         rm -f "$BUILD_DIR/new_iso/efiboot.img"
         truncate --size 64M "$BUILD_DIR/new_iso/efiboot.img"
@@ -946,9 +1149,14 @@ EOF
 build_v6_download_and_extract() {
     log_step "[V6] 2. Mengunduh & Mengekstrak Official RouterOS v6 ($VERSION)"
     local iso_file="$BUILD_DIR/mikrotik-$VERSION.iso"
-    wget -nv -O "$iso_file" "https://download.mikrotik.com/routeros/$VERSION/mikrotik-$VERSION.iso"
+    local iso_name="mikrotik-$VERSION.iso"
+    local iso_url="https://download.mikrotik.com/routeros/$VERSION/$iso_name"
+    cached_download "$iso_url" "$iso_file" "$iso_name"
+
     local ros_npk="$BUILD_DIR/routeros-$ARCH-$VERSION.npk"
-    wget -nv -O "$ros_npk" "https://download.mikrotik.com/routeros/$VERSION/routeros-$ARCH-$VERSION.npk"
+    local ros_name="routeros-$ARCH-$VERSION.npk"
+    local ros_url="https://download.mikrotik.com/routeros/$VERSION/$ros_name"
+    cached_download "$ros_url" "$ros_npk" "$ros_name"
 
     mkdir -p "$BUILD_DIR/all_packages" "$BUILD_DIR/iso" "$BUILD_DIR/new_iso"
     mount -o loop,ro "$iso_file" "$BUILD_DIR/iso"
@@ -1138,6 +1346,26 @@ EOF
 # ==============================================================================
 
 main() {
+    # 1. Mode tampilkan isi cache
+    if [ "$SHOW_CACHE_MODE" = true ]; then
+        show_cache_info
+        exit 0
+    fi
+
+    # 2. Mode bersihkan cache
+    if [ "$CLEAR_CACHE_MODE" = true ]; then
+        clear_cache_interactive
+        # Jika user hanya memanggil opsi cache tanpa versi build, langsung selesai
+        if [ -z "$VERSION" ]; then
+            exit 0
+        fi
+    fi
+
+    # 3. Mode menu interaktif
+    if [ "$MENU_MODE" = true ]; then
+        show_interactive_menu
+    fi
+
     show_banner
     check_system
     check_dependencies
