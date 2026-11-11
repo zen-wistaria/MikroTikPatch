@@ -1,0 +1,8 @@
+  MMM      MMM       KKK                          TTTTTTTTTTT      KKK
+  MMMM    MMMM       KKK                          TTTTTTTTTTT      KKK
+  MMM MMMM MMM  III  KKK  KKK  RRRRR     OOOOOO       TTT     III  KKK  KKK
+  MMM  MM  MMM  III  KKKKK     RRR  RR  OOO  OOO      TTT     III  KKKKK
+  MMM      MMM  III  KKK KKK   RRRRRR   OOO  OOO      TTT     III  KKK KKK
+  MMM      MMM  III  KKK  KKK  RRR  RR   OOOOOO       TTT     III  KKK  KKK
+
+  MikroTik RouterOS Custom Edition             https://mikrotik.com/
