@@ -361,13 +361,13 @@ build_v7_option_and_python() {
     cat << EOF > "$BUILD_DIR/option.jg"
 [
     {
-        name:'Patch About',
-        title:'Patch About',
+        name:'About',
+        title:'About',
         icon: 30,
         prio: 2000,
         c:[
             {
-                title:'Patch About',
+                title:'About',
                 type:'item',
                 path:[24, 2],
                 autorefresh: 1000, 
@@ -376,7 +376,6 @@ build_v7_option_and_python() {
                     {type:'gridcell'},
                     {name:'Patch',type:'tab',inline: 1},
                     {name:'Author',type:'string',def:'Local Patched Build'},
-                    {name:'GitHub',type:'string',def:'https://github.com/elseif/MikroTikPatch', url:1},
                     {name:'Busybox',type:'string',def:'$busybox_ver'},
                     {name:'System',type:'tab',inline: 1},
                     {name:'Uptime',type:'interval',id:'u1'},
@@ -876,13 +875,13 @@ build_v6_pipeline() {
     cat << EOF > "$BUILD_DIR/option.jg"
 [
     {
-        name:'Patch About',
-        title:'Patch About',
+        name:'About',
+        title:'About',
         icon: 30,
         prio: 2000,
         c:[
             {
-                title:'Patch About',
+                title:'About',
                 type:'item',
                 path:[24, 2],
                 autorefresh: 1000, 
@@ -891,8 +890,20 @@ build_v6_pipeline() {
                     {type:'gridcell'},
                     {name:'Patch',type:'tab',inline: 1},
                     {name:'Author',type:'string',def:'Local Patched Build'},
-                    {name:'GitHub',type:'string',def:'https://github.com/elseif/MikroTikPatch', url:1},
-                    {name:'Busybox',type:'string',def:'$busybox_ver'}
+                    {name:'Busybox',type:'string',def:'$busybox_ver'},
+                    {name:'System',type:'tab',inline: 1},
+                    {name:'Uptime',type:'interval',id:'u1'},
+                    {name:'Architecture Name',type:'string',id:'s1a'},
+                    {name:'Board Name',type:'string',id:'s2c'},
+                    {name:'Version',type:'version',id:'s16'},
+                    {name:'Build Time',type:'string',id:'s27'},
+                    {type:'separator'},
+                    {type:'toolbar',
+                        c: [
+                            {name:'License',type:'contextmenu',autostart: 1,group:'System',link: [],open:'License',tab:'License'},
+                            {name:'Check For Updates',type:'contextmenu',autostart: 1,group:'System',link: [],open:'Packages',tab:'Check For Updates'}
+                        ]
+                    }
                 ]
             }
         ]
