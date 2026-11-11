@@ -152,7 +152,7 @@ check_dependencies() {
     local missing_pkgs=()
 
     # Tools CLI penting
-    local required_bins=(python3 zip unzip mksquashfs unsquashfs jq wget curl xorriso qemu-img parted sgdisk mkfs.vfat mkfs.ext4 mkfs.ext2 truncate)
+    local required_bins=(python3 zip unzip mksquashfs unsquashfs jq wget curl xorriso qemu-img parted sgdisk sfdisk mkfs.vfat mkfs.ext4 mkfs.ext2 truncate)
     for b in "${required_bins[@]}"; do
         if ! command -v "$b" >/dev/null 2>&1; then
             missing_pkgs+=("$b")
@@ -337,7 +337,7 @@ trap cleanup EXIT INT TERM
 # PIPELINE ROUTEROS V7
 # ==============================================================================
 
-build_v7_option_and_python() {
+build_v7_option() {
     log_step "[V7] 1. Membangun Squashfs Option dan Python"
 
     # 1. Option Squashfs (Busybox + Keygen + WebFig patch menu)
@@ -850,11 +850,8 @@ EOF
 # PIPELINE ROUTEROS V6
 # ==============================================================================
 
-build_v6_pipeline() {
-    log_step "[V6] Menjalankan Pipeline RouterOS v6"
-    log_info "Versi: $VERSION (Arsitektur: $ARCH)"
-
-    # Option Squashfs
+build_v6_option() {
+    log_step "[V6] 1. Membangun Option Squashfs"
     mkdir -p "$BUILD_DIR/option-root/bin/"
     cp "./busybox/busybox_$ARCH" "$BUILD_DIR/option-root/bin/busybox"
     chmod +x "$BUILD_DIR/option-root/bin/busybox"
@@ -937,8 +934,11 @@ EOF
     ln -sf "option-$sha1_prefix.jg.gz" "$BUILD_DIR/option-root/home/web/webfig/option.jg.gz"
     mksquashfs "$BUILD_DIR/option-root" "$BUILD_DIR/option.sfs" -no-recovery -noappend -exit-on-error -quiet -comp xz -no-xattrs -b 256k -all-root
     rm -rf "$BUILD_DIR/option-root"
+    log_ok "Option squashfs dibuat: $BUILD_DIR/option.sfs"
+}
 
-    # Unduh ISO v6 & routeros.npk
+build_v6_download_and_extract() {
+    log_step "[V6] 2. Mengunduh & Mengekstrak Official RouterOS v6 ($VERSION)"
     local iso_file="$BUILD_DIR/mikrotik-$VERSION.iso"
     wget -nv -O "$iso_file" "https://download.mikrotik.com/routeros/$VERSION/mikrotik-$VERSION.iso"
     local ros_npk="$BUILD_DIR/routeros-$ARCH-$VERSION.npk"
@@ -952,33 +952,179 @@ EOF
     mv "$BUILD_DIR/all_packages/system-$VERSION.npk" "$BUILD_DIR/"
     umount "$BUILD_DIR/iso"
     rm -rf "$BUILD_DIR/iso"
+    log_ok "Ekstraksi paket v6 selesai."
+}
 
-    # Sign NPK
+build_v6_patch_npk() {
+    log_step "[V6] 3. Melakukan Patching & Signing Paket NPK v6"
     for file in "$BUILD_DIR/all_packages/"*.npk; do
         python3 npk.py sign "$file" "$file"
     done
 
     python3 npk.py create "$BUILD_DIR/all_packages/gps-$VERSION.npk" "$BUILD_DIR/all_packages/option-$VERSION.npk" option "$BUILD_DIR/option.sfs" -desc="busybox"
     rm -rf "$BUILD_DIR/option.sfs"
+
+    log_info "Mem-patch system-$VERSION.npk..."
     python3 patch.py npk "$BUILD_DIR/system-$VERSION.npk" -O "$BUILD_DIR/all_packages/system-$VERSION.npk"
+
     (cd "$BUILD_DIR/all_packages" && zip -r "$PUBLISH_DIR/all_packages-$ARCH-$VERSION.zip" .)
     mv "$BUILD_DIR/all_packages/"*.npk "$PUBLISH_DIR/"
-    python3 patch.py npk "$ros_npk" -O "$PUBLISH_DIR/routeros-$ARCH-$VERSION.npk"
+    rm -rf "$BUILD_DIR/all_packages"
 
-    # Build ISO v6
-    if [[ "$TARGET" == "all" || "$TARGET" == "iso" ]]; then
-        unzip -q "$PUBLISH_DIR/all_packages-$ARCH-$VERSION.zip" -d "$BUILD_DIR/new_iso/"
-        mv "$BUILD_DIR/new_iso/isolinux/initrd.rgz" "$BUILD_DIR/initrd.rgz"
-        python3 patch.py kernel "$BUILD_DIR/initrd.rgz" -O "$BUILD_DIR/new_iso/isolinux/initrd.rgz"
-        rm -f "$BUILD_DIR/initrd.rgz"
-        xorriso -as mkisofs -o "$PUBLISH_DIR/mikrotik-$VERSION.iso" \
-            -V "MikroTik $VERSION" -sysid "" -preparer "MiKroTiK" \
-            -publisher "" -A "MiKroTiK RouterOS" -input-charset utf-8 \
-            -b isolinux/isolinux.bin -c isolinux/boot.cat \
-            -no-emul-boot -boot-load-size 4 -boot-info-table -R -J \
-            "$BUILD_DIR/new_iso"
-        log_ok "ISO v6 berhasil dibuat: $PUBLISH_DIR/mikrotik-$VERSION.iso"
+    log_info "Mem-patch routeros-$ARCH-$VERSION.npk..."
+    python3 patch.py npk "$ros_npk" -O "$PUBLISH_DIR/routeros-$ARCH-$VERSION.npk"
+    log_ok "Paket v6 berhasil di-patch & sign: $PUBLISH_DIR/routeros-$ARCH-$VERSION.npk"
+}
+
+build_v6_iso_and_install() {
+    log_step "[V6] 4. Membangun ISO & USB Install Image v6"
+    unzip -q "$PUBLISH_DIR/all_packages-$ARCH-$VERSION.zip" -d "$BUILD_DIR/new_iso/"
+
+    # Patch initrd.rgz
+    mv "$BUILD_DIR/new_iso/isolinux/initrd.rgz" "$BUILD_DIR/initrd.rgz"
+    python3 patch.py kernel "$BUILD_DIR/initrd.rgz" -O "$BUILD_DIR/new_iso/isolinux/initrd.rgz"
+    rm -f "$BUILD_DIR/initrd.rgz"
+
+    # 1. ISO Image
+    log_info "Menyusun CD-ROM ISO v6..."
+    xorriso -as mkisofs -o "$PUBLISH_DIR/mikrotik-$VERSION.iso" \
+        -V "MikroTik $VERSION" -sysid "" -preparer "MiKroTiK" \
+        -publisher "" -A "MiKroTiK RouterOS" -input-charset utf-8 \
+        -b isolinux/isolinux.bin -c isolinux/boot.cat \
+        -no-emul-boot -boot-load-size 4 -boot-info-table -R -J \
+        "$BUILD_DIR/new_iso"
+    log_ok "ISO v6 berhasil dibuat: $PUBLISH_DIR/mikrotik-$VERSION.iso"
+
+    # 2. USB Install Image
+    log_info "Membuat image installer USB v6 (install-image-$VERSION.img)..."
+    local install_img="$BUILD_DIR/install-image-$VERSION.img"
+    truncate --size 128M "$install_img"
+    mkfs.vfat -I -F 32 -n "Install" "$install_img"
+    local loop_dev
+    loop_dev=$(losetup -f --show "$install_img")
+    syslinux --install "$loop_dev"
+    mkdir -p "$BUILD_DIR/install"
+    mount -o loop "$loop_dev" "$BUILD_DIR/install"
+
+    cp -vf "$BUILD_DIR/new_iso/isolinux/linux" "$BUILD_DIR/install/"
+    cp -vf /usr/lib/syslinux/modules/bios/ldlinux.c32 "$BUILD_DIR/install/" 2>/dev/null || cp -vf /usr/lib/syslinux/ldlinux.c32 "$BUILD_DIR/install/" 2>/dev/null || true
+    cp -vf "$BUILD_DIR/new_iso/isolinux/initrd.rgz" "$BUILD_DIR/install/initrd.rgz"
+
+    cat << 'EOF' > "$BUILD_DIR/install/syslinux.cfg"
+default system
+LABEL system
+  KERNEL linux
+  APPEND load_ramdisk=1 initrd=initrd.rgz -hdd-install
+EOF
+
+    local idx=1
+    for npk in "$BUILD_DIR/new_iso/"*.npk; do
+        cp "$npk" "$BUILD_DIR/install/$idx.npk"
+        ((idx++))
+    done
+    touch "$BUILD_DIR/install/CHOOSE"
+    sync
+    umount "$BUILD_DIR/install"
+    losetup -d "$loop_dev"
+    rm -rf "$BUILD_DIR/install"
+
+    (cd "$BUILD_DIR" && zip "$PUBLISH_DIR/install-image-$VERSION.zip" "install-image-$VERSION.img")
+    rm -f "$install_img"
+    rm -rf "$BUILD_DIR/new_iso"
+    log_ok "USB install image v6 berhasil dibuat: $PUBLISH_DIR/install-image-$VERSION.zip"
+}
+
+build_v6_chr() {
+    log_step "[V6] 5. Membangun CHR Image v6"
+    modprobe nbd 2>/dev/null || true
+
+    mkdir -p "$BUILD_DIR/chr"
+    local chr_img="$BUILD_DIR/chr-$VERSION$ARCH_EXT.img"
+    truncate --size 128M "$chr_img"
+
+    # MBR partition menggunakan sfdisk
+    sfdisk "$chr_img" <<EOF
+label: dos
+unit: sectors
+start=1, size=, type=83, bootable
+EOF
+
+    dd if="$chr_img" of="$BUILD_DIR/mbr.bin" bs=1 count=512 conv=notrunc status=none
+    # Tulis boot sector code
+    python3 -c "import sys; sys.stdout.buffer.write(bytes.fromhex('FA31C08ED0BC007C89E65007501FFBFCBF0006B90001F2A5EA1D060000BEBE07B304803C807423803C00750983C610FECB75EFCD18BE9B06AC3C00740B56BB0700B40ECD105EEBF0EBFE8B148B4C0289F5BF0500BB007CB8010257CD135F730C31C0CD134F75EDBE7C06EBCCBFFE7D813D55AA75C289EEEA007C00004572726F72206C6F6164696E67206F7065726174696E672073797374656D004D697373696E67206F7065726174696E672073797374656D0000000000'))" | dd of="$BUILD_DIR/mbr.bin" bs=1 count=440 conv=notrunc status=none
+    # Active CHR mode marker (byte offset 336: 0x01)
+    printf '\x01' | dd of="$BUILD_DIR/mbr.bin" bs=1 count=1 seek=336 conv=notrunc status=none
+    dd if="$BUILD_DIR/mbr.bin" of="$chr_img" bs=1 count=512 conv=notrunc status=none
+    rm -f "$BUILD_DIR/mbr.bin"
+
+    qemu-nbd -d /dev/nbd0 2>/dev/null || true
+    qemu-nbd -c /dev/nbd0 -f raw "$chr_img"
+    partprobe /dev/nbd0 || sleep 1
+
+    mkfs.ext3 -F -L "system" -m 0 /dev/nbd0p1
+    mount /dev/nbd0p1 "$BUILD_DIR/chr"
+
+    mkdir -p "$BUILD_DIR/chr/"{boot,bin,rw/disk,var/pdb/{routeros-x86,option,dude}}
+    mkdir -p "$BUILD_DIR/"{boot,bin}
+
+    log_info "Mengekstrak kernel & bootloader milo v6 dari NPK..."
+    python3 npk.py extract "$PUBLISH_DIR/routeros-$ARCH-$VERSION.npk" bin/milo "$BUILD_DIR/bin/milo"
+    chmod +x "$BUILD_DIR/bin/milo"
+    python3 npk.py extract "$PUBLISH_DIR/routeros-$ARCH-$VERSION.npk" boot/vmlinuz-64 "$BUILD_DIR/boot/vmlinuz-64"
+    python3 npk.py extract "$PUBLISH_DIR/routeros-$ARCH-$VERSION.npk" boot/initrd.rgz "$BUILD_DIR/boot/initrd.rgz"
+    python3 npk.py extract "$PUBLISH_DIR/routeros-$ARCH-$VERSION.npk" boot/map "$BUILD_DIR/boot/map"
+    python3 npk.py extract "$PUBLISH_DIR/routeros-$ARCH-$VERSION.npk" boot/milo.conf "$BUILD_DIR/boot/milo.conf"
+    python3 npk.py extract "$PUBLISH_DIR/routeros-$ARCH-$VERSION.npk" boot/vmlinuz "$BUILD_DIR/boot/vmlinuz"
+    python3 npk.py extract "$PUBLISH_DIR/routeros-$ARCH-$VERSION.npk" boot/vmlinuz-smp "$BUILD_DIR/boot/vmlinuz-smp"
+
+    mv "$BUILD_DIR/boot" "$BUILD_DIR/chr/"
+    mv "$BUILD_DIR/bin" "$BUILD_DIR/chr/"
+
+    cp -v "$PUBLISH_DIR/routeros-$ARCH-$VERSION.npk" "$BUILD_DIR/chr/var/pdb/routeros-x86/image"
+    cp -v "$PUBLISH_DIR/option-$VERSION$ARCH_EXT.npk" "$BUILD_DIR/chr/var/pdb/option/image"
+    if [ -f "$PUBLISH_DIR/dude-$VERSION$ARCH_EXT.npk" ]; then
+        cp -v "$PUBLISH_DIR/dude-$VERSION$ARCH_EXT.npk" "$BUILD_DIR/chr/var/pdb/dude/image"
     fi
+
+    cat << 'EOF' > "$BUILD_DIR/chr/rw/disk/rc.local"
+#!/bin/sh
+# This script will be executed *before* RouterOS *loader* start.
+# Put custom initialization commands here.
+EOF
+    chmod +x "$BUILD_DIR/chr/rw/disk/rc.local"
+    touch "$BUILD_DIR/chr/rw/REBOOT"
+    touch "$BUILD_DIR/chr/rw/ENABLE_X86_64"
+    touch "$BUILD_DIR/chr/UPGRADED"
+    touch "$BUILD_DIR/chr/SHOW_LICENSE"
+    chown -R root:root "$BUILD_DIR/chr"
+
+    # Pasang bootloader milo via chroot
+    chroot "$BUILD_DIR/chr" /bin/milo /boot
+
+    sync
+    umount "$BUILD_DIR/chr"
+    qemu-nbd -d /dev/nbd0 2>/dev/null || true
+    rm -rf "$BUILD_DIR/chr"
+
+    log_info "Mengonversi format image virtual v6..."
+    local prefix="${chr_img%.img}"
+    local name="${prefix##*/}"
+
+    qemu-img convert -f raw -O qcow2 "$chr_img" "$prefix.qcow2"
+    qemu-img convert -f raw -O vmdk  "$chr_img" "$prefix.vmdk"
+    qemu-img convert -f raw -O vpc   "$chr_img" "$prefix.vhd"
+    qemu-img convert -f raw -O vhdx  "$chr_img" "$prefix.vhdx"
+    qemu-img convert -f raw -O vdi   "$chr_img" "$prefix.vdi"
+
+    (cd "$BUILD_DIR" && \
+        zip -q "$PUBLISH_DIR/$name.qcow2.zip" "$name.qcow2" && \
+        zip -q "$PUBLISH_DIR/$name.vmdk.zip" "$name.vmdk" && \
+        zip -q "$PUBLISH_DIR/$name.vhd.zip" "$name.vhd" && \
+        zip -q "$PUBLISH_DIR/$name.vhdx.zip" "$name.vhdx" && \
+        zip -q "$PUBLISH_DIR/$name.vdi.zip" "$name.vdi" && \
+        zip -q "$PUBLISH_DIR/$name.img.zip" "$name.img" )
+    rm -f "$prefix".*
+    log_ok "Semua format image CHR v6 berhasil dibuat."
 }
 
 # ==============================================================================
@@ -994,7 +1140,7 @@ main() {
     setup_dirs
 
     if [[ "$MAJOR_VERSION" == "v7" ]]; then
-        build_v7_option_and_python
+        build_v7_option
         build_v7_download_and_extract
         build_v7_patch_npk
 
@@ -1007,7 +1153,17 @@ main() {
         fi
 
     elif [[ "$MAJOR_VERSION" == "v6" ]]; then
-        build_v6_pipeline
+        build_v6_option
+        build_v6_download_and_extract
+        build_v6_patch_npk
+
+        if [[ "$TARGET" == "all" || "$TARGET" == "iso" || "$TARGET" == "install" ]]; then
+            build_v6_iso_and_install
+        fi
+
+        if [[ "$TARGET" == "all" || "$TARGET" == "chr" ]]; then
+            build_v6_chr
+        fi
     fi
 
     # Buat Checksum SHA256
