@@ -29,6 +29,7 @@ KEEP_BUILD=false
 ENV_FILE="$SCRIPT_DIR/.env"
 BUILD_BASE_DIR="/tmp/mikrotik_build"
 PUBLISH_BASE_DIR="$SCRIPT_DIR/publish"
+AUTHOR="Unknown - Local Patched Build"
 
 # --- Banner ---
 show_banner() {
@@ -60,6 +61,7 @@ Opsi:
   -m, --major <v7|v6>      Versi mayor: 'v7' atau 'v6' (Default: otomatis sesuai versi)
   -e, --env <file>         Path file konfigurasi .env (Default: ./.env)
   -o, --output <dir>       Direktori output (Default: ./publish/<version>)
+  -b  --by <author name>   Nama author untuk about
   -k, --keep-build         Jangan hapus folder sementara build setelah selesai
   -h, --help               Tampilkan pesan bantuan ini
 
@@ -96,6 +98,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -o|--output)
             PUBLISH_BASE_DIR="$2"
+            shift 2
+            ;;
+        -b|--by)
+            AUTHOR="$2"
             shift 2
             ;;
         -k|--keep-build)
@@ -375,7 +381,7 @@ build_v7_option() {
                 c: [
                     {type:'gridcell'},
                     {name:'Patch',type:'tab',inline: 1},
-                    {name:'Author',type:'string',def:'Local Patched Build'},
+                    {name:'Author',type:'string',def:'$AUTHOR'},
                     {name:'Busybox',type:'string',def:'$busybox_ver'},
                     {name:'System',type:'tab',inline: 1},
                     {name:'Uptime',type:'interval',id:'u1'},
@@ -886,7 +892,7 @@ build_v6_option() {
                 c: [
                     {type:'gridcell'},
                     {name:'Patch',type:'tab',inline: 1},
-                    {name:'Author',type:'string',def:'Local Patched Build'},
+                    {name:'Author',type:'string',def:'$AUTHOR'},
                     {name:'Busybox',type:'string',def:'$busybox_ver'},
                     {name:'System',type:'tab',inline: 1},
                     {name:'Uptime',type:'interval',id:'u1'},
