@@ -5,3 +5,7 @@ app/
 loader/
 test/
 test_*.py
+.env
+build/
+publish/
+*.sfs
